@@ -1,0 +1,113 @@
+# ==============================================================================
+#  z2roN_story 자동 빌드 설명  (이 파일: .github/workflows/build.yml)
+# ==============================================================================
+#  이 파일은 GitHub Actions 설정입니다. 소스를 GitHub에 올리면 GitHub의 서버가
+#  Android 앱(APK)과 Windows 앱을 대신 만들어 줍니다. 내 PC에 설치할 것은 없습니다.
+#
+#  [사용 방법]
+#   1) 이 프로젝트 전체(.github 폴더 포함)를 GitHub 저장소에 올립니다.
+#   2) 저장소 위쪽 탭 Actions > 왼쪽 "z2roN_story 빌드" > Run workflow 버튼 클릭
+#      (main 브랜치에 파일을 올리면 자동으로도 실행됩니다)
+#   3) 5~15분 뒤 초록 체크가 뜨면, 그 실행을 눌러 맨 아래 Artifacts에서 내려받습니다.
+#        - z2roN_story-android-v버전  : 안드로이드 설치 파일(app-release.apk)
+#        - z2roN_story-windows-v버전  : 윈도우 프로그램 폴더 (z2roN_story.exe 실행)
+#      (파일 이름의 v버전은 pubspec.yaml 의 version 값입니다)
+#
+#  [하는 일]  플랫폼 폴더 생성 → 앱 이름/권한/최소 SDK 설정 → 아이콘 생성 → 빌드 → 업로드
+#
+#  [이름 규칙]
+#   - 화면/실행 파일에 보이는 이름 : z2roN_story  (아래 APP_NAME)
+#   - Dart 패키지 이름(소문자만 허용) : z2ron_story  (아래 PKG_NAME)
+#
+#  [실패했을 때]  빨간 X 단계를 열어 마지막 30줄 정도의 오류 메시지를 확인하세요.
+#                Android는 보안 저장소 요구사항(minSdk 23)과 R8 오류 방지(--no-shrink)를
+#                이미 적용해 두었습니다.
+#  [업데이트할 때]  pubspec.yaml 의 version 과 lib/version.dart 의 버전/내역을 함께 올립니다.
+# ==============================================================================
+name: z2roN_story 빌드
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  APP_NAME: z2roN_story
+  PKG_NAME: z2ron_story
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: 플랫폼 폴더 생성
+        run: |
+          flutter create --platforms=android,windows --project-name "$PKG_NAME" --org com.z2ron .
+          rm -f test/widget_test.dart
+      - name: 인터넷 권한 추가 (없으면 메일 서버에 연결할 수 없음)
+        run: |
+          M=android/app/src/main/AndroidManifest.xml
+          sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' "$M"
+          grep -q "android.permission.INTERNET" "$M" || { echo "INTERNET 권한 추가 실패"; exit 1; }
+      - name: 앱 이름 설정
+        run: sed -i "s/android:label=\"[^\"]*\"/android:label=\"$APP_NAME\"/" android/app/src/main/AndroidManifest.xml
+      - name: 최소 SDK 23 (보안 저장소 요구사항)
+        run: |
+          for f in android/app/build.gradle android/app/build.gradle.kts; do
+            [ -f "$f" ] || continue
+            sed -i -E 's/minSdk(Version)?[ =]+flutter\.minSdkVersion/minSdk = 23/' "$f"
+            grep -n "minSdk" "$f" || true
+          done
+      - run: flutter pub get
+      - name: 앱 아이콘 생성 (실패해도 빌드는 계속)
+        continue-on-error: true
+        run: dart run flutter_launcher_icons
+      - name: APK 빌드
+        run: flutter build apk --release --no-shrink
+      - name: 버전 읽기
+        id: ver
+        shell: bash
+        run: echo "v=$(grep '^version:' pubspec.yaml | sed -E 's/version:[ ]*//; s/\+.*//')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: z2roN_story-android-v${{ steps.ver.outputs.v }}
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: 플랫폼 폴더 생성
+        shell: bash
+        run: |
+          flutter create --platforms=android,windows --project-name "$PKG_NAME" --org com.z2ron .
+          rm -f test/widget_test.dart
+      - name: 실행 파일/창 이름 설정
+        shell: bash
+        run: |
+          sed -i "s/set(BINARY_NAME \"[^\"]*\")/set(BINARY_NAME \"$APP_NAME\")/" windows/CMakeLists.txt
+          sed -i "s/$PKG_NAME/$APP_NAME/g" windows/runner/main.cpp windows/runner/Runner.rc
+          grep -n "BINARY_NAME" windows/CMakeLists.txt | head -3
+      - run: flutter pub get
+      - name: 앱 아이콘 생성 (실패해도 빌드는 계속)
+        continue-on-error: true
+        run: dart run flutter_launcher_icons
+      - run: flutter build windows --release
+      - name: 버전 읽기
+        id: ver
+        shell: bash
+        run: echo "v=$(grep '^version:' pubspec.yaml | sed -E 's/version:[ ]*//; s/\+.*//')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: z2roN_story-windows-v${{ steps.ver.outputs.v }}
+          path: build/windows/x64/runner/Release
